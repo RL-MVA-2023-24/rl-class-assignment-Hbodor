@@ -27,8 +27,12 @@ class QNetwork(nn.Module):
         x = torch.relu(self.fc2(x))
         return self.fc3(x)
 
-class DQNAgent:
-    def __init__(self, env = None, state_size = None, action_size = None, seed = 42):
+class ProjectAgent:
+    def __init__(self, seed = 42):
+        env = TimeLimit(
+        env=HIVPatient(domain_randomization=False), max_episode_steps=200)
+        state_size = env.observation_space.shape[0]
+        action_size = env.action_space.n
         self.env = env
         self.state_size = state_size
         self.action_size = action_size
@@ -98,7 +102,7 @@ class DQNAgent:
     def save(self, file_name):
         torch.save(self.qnetwork_local.state_dict(), file_name)
 
-    def load(self, file_name):
+    def load(self, file_name = "checkpoint_100.pth"):
         self.qnetwork_local.load_state_dict(torch.load(file_name))
         self.qnetwork_target.load_state_dict(torch.load(file_name))
 
@@ -108,7 +112,7 @@ if __name__ == "__main__":
     # Agent initialization
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
-    agent = DQNAgent(env, state_size, action_size, seed=0)
+    agent = ProjectAgent(env, seed=0)
 
     # Training loop
     def train_dqn(n_episodes=2000, max_t=200, eps_start=1.0, eps_end=0.01, eps_decay=0.995):

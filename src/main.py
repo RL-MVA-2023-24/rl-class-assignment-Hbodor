@@ -2,14 +2,9 @@ import random
 import os
 import numpy as np
 import torch
-from gymnasium.wrappers import TimeLimit
-from env_hiv import HIVPatient
 
 from evaluate import evaluate_HIV, evaluate_HIV_population
-from train import DQNAgent  # Replace DummyAgent with your agent implementation
-
-
-
+from train import ProjectAgent  # Replace DummyAgent with your agent implementation
 
 
 def seed_everything(seed: int = 42):
@@ -26,18 +21,9 @@ def seed_everything(seed: int = 42):
 if __name__ == "__main__":
     seed_everything(seed=42)
     # Initialization of the agent. Replace DummyAgent with your custom agent implementation.
-    #agent = ProjectAgent()
-    # Setting up the environment
-    env = TimeLimit(
-        env=HIVPatient(domain_randomization=False), max_episode_steps=200
-    )
-    state_size = env.observation_space.shape[0]
-    action_size = env.action_space.n
-    agent = DQNAgent(env, state_size, action_size, seed=42)
-    #agent.load("model.pth")
-    agent.load("checkpoint_100.pth")
+    agent = ProjectAgent()
+    agent.load()
     # Keep the following lines to evaluate your agent unchanged.
-    print("Scoring ...")
     score_agent: float = evaluate_HIV(agent=agent, nb_episode=1)
     score_agent_dr: float = evaluate_HIV_population(agent=agent, nb_episode=15)
     with open(file="score.txt", mode="w") as f:
