@@ -102,7 +102,8 @@ class ProjectAgent:
     def save(self, file_name):
         torch.save(self.qnetwork_local.state_dict(), file_name)
 
-    def load(self, file_name = "checkpoint_100.pth"):
+    def load(self, file_name = "checkpoint_400.pth"):
+        print(f"Scoring for {file_name} ...")
         self.qnetwork_local.load_state_dict(torch.load(file_name))
         self.qnetwork_target.load_state_dict(torch.load(file_name))
 
@@ -112,14 +113,14 @@ if __name__ == "__main__":
     # Agent initialization
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
-    agent = ProjectAgent(env, seed=0)
+    agent = ProjectAgent(seed=0)
 
     # Training loop
-    def train_dqn(n_episodes=2000, max_t=200, eps_start=1.0, eps_end=0.01, eps_decay=0.995):
+    def train_dqn(n_episodes=2000, max_t=500, eps_start=1.0, eps_end=0.01, eps_decay=0.995):
         scores = []                        # List to save scores from each episode
         eps = eps_start                    # Initialize epsilon for epsilon-greedy action selection
-        t = time.time()
         for i_episode in range(1, n_episodes+1):
+            t = time.time()
             state = env.reset()[0]
             score = 0
             for t in range(max_t):
