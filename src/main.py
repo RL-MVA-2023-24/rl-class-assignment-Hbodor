@@ -35,7 +35,7 @@ if __name__ == "__main__":
     action_size = env.action_space.n
     agent = DQNAgent(env, state_size, action_size, seed=42)
     #agent.load("model.pth")
-    agent.load("checkpoint_200.pth")
+    agent.load("checkpoint_100.pth")
     # Keep the following lines to evaluate your agent unchanged.
     print("Scoring ...")
     score_agent: float = evaluate_HIV(agent=agent, nb_episode=1)
