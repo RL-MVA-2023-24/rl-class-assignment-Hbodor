@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from evaluate import evaluate_HIV, evaluate_HIV_population
-from train import ProjectAgent, RandomAgent  # Replace DummyAgent with your agent implementation
+from train import ProjectAgent, ProjectAgent2, RandomAgent  # Replace DummyAgent with your agent implementation
 
 
 def seed_everything(seed: int = 42):
@@ -21,8 +21,8 @@ def seed_everything(seed: int = 42):
 if __name__ == "__main__":
     seed_everything(seed=42)
     # Initialization of the agent. Replace DummyAgent with your custom agent implementation.
-    agent = RandomAgent()
-    agent.load()
+    agent = ProjectAgent2()
+    agent.load("checkpoint_1300.pth")
     # Keep the following lines to evaluate your agent unchanged.
     score_agent: float = evaluate_HIV(agent=agent, nb_episode=1)
     score_agent_dr: float = evaluate_HIV_population(agent=agent, nb_episode=15)
