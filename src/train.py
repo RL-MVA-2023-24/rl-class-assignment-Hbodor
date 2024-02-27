@@ -1,330 +1,309 @@
 from gymnasium.wrappers import TimeLimit
-from env_hiv import HIVPatient
-import logging
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import random
-from collections import deque
-import time
+from copy import deepcopy
+import numpy as np
 
-# Setting up the environment
+from env_hiv import HIVPatient
+from evaluate import evaluate_HIV, evaluate_HIV_population
+from train_utils import ReplayBuffer, DuelingDQN, DQN
+
 env = TimeLimit(
     env=HIVPatient(domain_randomization=False), max_episode_steps=200
-)
+)  # The time wrapper limits the number of steps in an episode at 200.
+# Now is the floor is yours to implement the agent and train it.$
 
-class QNetwork(nn.Module):
-    def __init__(self, state_size, action_size, seed, fc1_units=64, fc2_units=64):
-        super(QNetwork, self).__init__()
-        self.seed = torch.manual_seed(seed)
-        self.fc1 = nn.Linear(state_size, fc1_units)
-        self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.fc3 = nn.Linear(fc2_units, action_size)
+# You have to implement your own agent.
+# Don't modify the methods names and signatures, but you can add methods.
+# ENJOY!
+class DQNAgent:
+    # act greedy
+    def __init__(self):
+        self.model = None
+        self.target_model = None
+        self.memory = None
+        self.optimizer = None
+        self.optimizer2 = None
+        self.gamma = None
+        self.batch_size = None
+        self.nb_actions = None
+        self.config = None
+        self.path = ""
+        self.model_name_prefix = ""
+        self.model_name_suffix = "DQN"
+        self.best_model = None
 
-    def forward(self, state):
-        x = torch.relu(self.fc1(state))
-        x = torch.relu(self.fc2(x))
-        return self.fc3(x)
-
-class ProjectAgent:
-    def __init__(self, seed = 42):
-        env = TimeLimit(
-        env=HIVPatient(domain_randomization=False), max_episode_steps=200)
-        state_size = env.observation_space.shape[0]
-        action_size = env.action_space.n
-        self.env = env
-        self.state_size = state_size
-        self.action_size = action_size
-        self.seed = random.seed(seed)
-
-        # Q-Network
-        self.qnetwork_local = QNetwork(state_size, action_size, seed)
-        self.qnetwork_target = QNetwork(state_size, action_size, seed)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=0.001)
-        
-        # Replay memory
-        self.memory = deque(maxlen=10000)
-        self.batch_size = 64
-        self.gamma = 0.99
-        self.epsilon = 1.0
-        self.epsilon_decay = 0.995
-        self.epsilon_min = 0.01
-        self.t_step = 0
-        
-    def act(self, state, use_random=False):
-        state = torch.from_numpy(state).float().unsqueeze(0)
-        self.qnetwork_local.eval()
+    def act(self, observation, use_random=False):
+        device = "cuda" if next(self.model.parameters()).is_cuda else "cpu"
         with torch.no_grad():
-            action_values = self.qnetwork_local(state)
-        self.qnetwork_local.train()
-
-        if use_random or random.random() <= self.epsilon:
-            return random.randrange(self.action_size)
-        else:
-            return np.argmax(action_values.cpu().data.numpy())
-
-    def step(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
-        
-        # Learning happens every four steps
-        self.t_step = (self.t_step + 1) % 4
-        if self.t_step == 0:
-            if len(self.memory) > self.batch_size:
-                self.learn()
-
-    def learn(self):
-        if len(self.memory) < self.batch_size:
-            return
-        minibatch = random.sample(self.memory, self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*minibatch)
-        
-        states = torch.FloatTensor(states)
-        actions = torch.LongTensor(actions).unsqueeze(1)
-        rewards = torch.FloatTensor(rewards)
-        next_states = torch.FloatTensor(next_states)
-        dones = torch.FloatTensor(np.float32(dones))
-
-        # Double DQN update
-        Q_expected = self.qnetwork_local(states).gather(1, actions)
-        Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
-        Q_targets = rewards + (self.gamma * Q_targets_next * (1 - dones))
-
-        # Loss and optimization
-        loss = nn.MSELoss()(Q_expected, Q_targets)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        # Update epsilon
-        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
-
-    def save(self, file_name):
-        torch.save(self.qnetwork_local.state_dict(), file_name)
-
-    def load(self, file_name = "checkpoint_400.pth"):
-        print(f"Scoring for {file_name} ...")
-        self.qnetwork_local.load_state_dict(torch.load(file_name))
-        self.qnetwork_target.load_state_dict(torch.load(file_name))
+            Q = self.model(torch.Tensor(observation).unsqueeze(0).to(device))
+            action = torch.argmax(Q).item()
+        return action
 
 
+    def save(self, path):
+        # prefix based on the values of self.config
+        self.path = path + f"{self.model_name_prefix}_{self.model_name_suffix}.pt"
+        torch.save(self.model.state_dict(), self.path)
+        return 
 
+    def load(self, file_name = "model2.pt"):
+        device = torch.device('cpu')
+        self.path = ""
+        self.model = self.network({}, device)
+        self.model.load_state_dict(torch.load(self.path + file_name, map_location=device))
+        self.model.eval()
+        return 
 
-import numpy as np
-import random
-from collections import deque
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
+    def network(self, config, device):
+        state_dim = env.observation_space.shape[0]
+        n_action = env.action_space.n
+        nb_neurons = config.get('nb_neurons', 256)  # Default to 256 if not specified
+        depth = config.get('depth', 5)  # Default depth is 5
+        activation = config.get('activation', 'relu')  # Default activation function is ReLU
+        # Initialize the DQN model with the specified parameters
+        model = DQN(state_dim=state_dim, n_action=n_action, nb_neurons=nb_neurons, depth = depth, activation = activation).network.to(device)
+        return model
 
-class QNetwork(nn.Module):
-    def __init__(self, state_size, action_size, seed, fc1_units=64, fc2_units=64):
-        super(QNetwork, self).__init__()
-        self.seed = torch.manual_seed(seed)
-        self.fc1 = nn.Linear(state_size, fc1_units)
-        self.fc2 = nn.Linear(fc1_units, fc2_units)
-        self.fc3 = nn.Linear(fc2_units, action_size)
-
-    def forward(self, state):
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
-
-class ProjectAgent2:
-    def __init__(self, seed=42, tau=0.1, update_every=5):
-        env = TimeLimit(
-        env=HIVPatient(domain_randomization=False), max_episode_steps=200)
-        state_size = env.observation_space.shape[0]
-        action_size = env.action_space.n
-        self.state_size = state_size
-        self.action_size = action_size
-        self.env = env
-        self.seed = random.seed(seed)
-        self.tau = tau
-        self.update_every = update_every
-        self.episode_count = 0  # To track the number of episodes for periodic updates
-
-        # Q-Network
-        self.qnetwork_local = QNetwork(state_size, action_size, seed)
-        self.qnetwork_target = QNetwork(state_size, action_size, seed)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=0.001)
-
-        # Replay memory
-        self.memory = deque(maxlen=10000)
-        self.batch_size = 64
-        self.gamma = 0.99
-        self.epsilon = 1.0
-        self.epsilon_decay = 0.995
-        self.epsilon_min = 0.01
-        self.t_step = 0
-
-    def act(self, state, use_random=False):
-        state = torch.from_numpy(state).float().unsqueeze(0)
-        self.qnetwork_local.eval()
+    ## UTILITY FUNCTIONS
+    def greedy_action(self, network, state):
+        device = "cuda" if next(network.parameters()).is_cuda else "cpu"
         with torch.no_grad():
-            action_values = self.qnetwork_local(state)
-        self.qnetwork_local.train()
+            Q = network(torch.Tensor(state).unsqueeze(0).to(device))
+            return torch.argmax(Q).item()
 
-        if use_random or random.random() <= self.epsilon:
-            return random.randrange(self.action_size)
-        else:
-            return np.argmax(action_values.cpu().data.numpy())
+    def gradient_step(self):
+        if len(self.memory) > self.batch_size:
+            X, A, R, Y, D = self.memory.sample(self.batch_size)
+            QYmax = self.target_model(Y).max(1)[0].detach()
+            update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
+            QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
+            loss = self.criterion(QXA, update.unsqueeze(1))
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step() 
+    
+    def train(self, max_episode = 200):
+        ## CONFIGURE NETWORK
+        # DQN config (change here for better results?)
+        config = {'nb_actions': env.action_space.n,
+                  'activation': 'relu',
+                  'depth' : 2,
+                    'learning_rate': 0.001,
+                    'gamma': 0.99,
+                    'buffer_size': 100000,
+                    'epsilon_min': 0.01,
+                    'epsilon_max': 1.,
+                    'epsilon_decay_period': 15000,
+                    'epsilon_delay_decay': 1000,
+                    'batch_size': 200,
+                    'gradient_steps': 5,
+                    'update_target_strategy': 'replace', # or 'ema'
+                    'update_target_freq': 100,
+                    'update_target_tau': 0.005,
+                    'criterion': torch.nn.SmoothL1Loss()}
+        # Select the keys you want to include in the prefix
+        keys = ['depth', 'activation', 'learning_rate', 'gamma', "gradient_steps", "update_target_freq", "update_target_tau", "update_target_strategy", "epsilon_decay_period", "criterion"]
 
-    def step(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
+        # Create the prefix by concatenating the key-value pairs
+        prefix = '_'.join(f'{key}={config[key]}' for key in keys)
+
+        # Now you can use this prefix when naming your model
+        model_name = f'{prefix}_model'
+        self.model_name_prefix = model_name
+        self.config = config
+        # network
+        device = device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print('Using device:', device)
+        self.model = self.network(config, device)
+        self.target_model = deepcopy(self.model).to(device)
+
+        # 
+        self.gamma = config['gamma']
+        self.batch_size = config['batch_size']
+        self.nb_actions = config['nb_actions']
+
+        # epsilon greedy strategy
+        epsilon_max = config['epsilon_max']
+        epsilon_min = config['epsilon_min']
+        epsilon_stop = config['epsilon_decay_period'] 
+        epsilon_delay = config['epsilon_delay_decay']
+        epsilon_step = (epsilon_max-epsilon_min)/epsilon_stop
+
+        # memory buffer
+        self.memory = ReplayBuffer(config['buffer_size'], device)
+
+        # learning parameters (loss, lr, optimizer, gradient step)
+        self.criterion = config['criterion'] if 'criterion' in config.keys() else torch.nn.MSELoss()
+        lr = config['learning_rate'] if 'learning_rate' in config.keys() else 0.001
         
-        self.t_step = (self.t_step + 1) % 4
-        if self.t_step == 0:
-            if len(self.memory) > self.batch_size:
-                experiences = random.sample(self.memory, self.batch_size)
-                self.learn(experiences, self.gamma)
+        self.optimizer = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.optimizer2 = config['optimizer'] if 'optimizer' in config.keys() else torch.optim.Adam(self.model.parameters(), lr=lr)
+        
+        nb_gradient_steps = config['gradient_steps'] if 'gradient_steps' in config.keys() else 1
 
-        if done:
-            self.episode_count += 1
-            if self.episode_count % self.update_every == 0:
-                self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
+        # target network
+        update_target_strategy = config['update_target_strategy'] if 'update_target_strategy' in config.keys() else 'replace'
+        update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
+        update_target_tau = config['update_target_tau'] if 'update_target_tau' in config.keys() else 0.005
 
-    def learn(self, experiences, gamma):
-        states, actions, rewards, next_states, dones = zip(*experiences)
+        previous_val = 0
+        ## INITIATE NETWORK
+        episode_return = []
+        episode = 0
+        episode_cum_reward = 0
+        state, _ = env.reset()
+        epsilon = epsilon_max
+        step = 0
 
-        states = torch.FloatTensor(states)
-        actions = torch.LongTensor(actions).view(-1, 1)
-        rewards = torch.FloatTensor(rewards)
-        next_states = torch.FloatTensor(next_states)
-        dones = torch.FloatTensor(dones)
+        ## TRAIN NETWORK
+        print("Training the agent for ", max_episode, " episodes.")
+        print(f"Model config is {config}")
+        while episode < max_episode:
+            # update epsilon
+            if step > epsilon_delay:
+                epsilon = max(epsilon_min, epsilon-epsilon_step)
+            # select epsilon-greedy action
+            if np.random.rand() < epsilon:
+                action = env.action_space.sample()
+            else:
+                action = self.greedy_action(self.model, state)
+            # step
+            next_state, reward, done, trunc, _ = env.step(action)
+            self.memory.append(state, action, reward, next_state, done)
+            episode_cum_reward += reward
+            # train
+            for _ in range(nb_gradient_steps): 
+                self.gradient_step()
+            # update target network if needed
+            if update_target_strategy == 'replace':
+                if step % update_target_freq == 0: 
+                    self.target_model.load_state_dict(self.model.state_dict())
+            if update_target_strategy == 'ema':
+                target_state_dict = self.target_model.state_dict()
+                model_state_dict = self.model.state_dict()
+                tau = update_target_tau
+                for key in model_state_dict:
+                    target_state_dict[key] = tau*model_state_dict[key] + (1-tau)*target_state_dict[key]
+                self.target_model.load_state_dict(target_state_dict)
+            # next transition
+            step += 1
+            if done or trunc:
+                episode += 1
+                if episode > 0:
+                    validation_score = evaluate_HIV(agent=self, nb_episode=1)
+                else :
+                    validation_score = 0
+                print("Episode ", '{:3d}'.format(episode), 
+                      ", epsilon ", '{:6.2f}'.format(epsilon), 
+                      ", batch size ", '{:5d}'.format(len(self.memory)), 
+                      ", episode return ", '{:.2e}'.format(episode_cum_reward),
+                      # evaluation score 
+                      ", validation score ", '{:.2e}'.format(validation_score),
+                      sep='')
+                state, _ = env.reset()
+                # EARLY STOPPING => works really well
+                if validation_score >= previous_val:
+                   print("better model")
+                   self.path = ""
+                   self.save(self.path)
+                   previous_val = validation_score
+                   self.best_model = deepcopy(self.model).to(device)
+                episode_return.append(episode_cum_reward)
+                
+                episode_cum_reward = 0
+            else:
+                state = next_state
 
-        next_actions = self.qnetwork_local(next_states).detach().argmax(1).unsqueeze(1)
-        Q_targets_next = self.qnetwork_target(next_states).gather(1, next_actions)
-        Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
 
-        Q_expected = self.qnetwork_local(states).gather(1, actions)
-
-        loss = F.mse_loss(Q_expected, Q_targets)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-    def soft_update(self, local_model, target_model, tau):
-        for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
-            target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)
-
-    def save(self, file_name):
-        torch.save(self.qnetwork_local.state_dict(), file_name)
-
-    def load(self, file_name = "checkpoint_400.pth"):
-        print(f"Scoring for {file_name} ...")
-        self.qnetwork_local.load_state_dict(torch.load(file_name))
-        self.qnetwork_target.load_state_dict(torch.load(file_name))
-
-# Assuming the environment setup and necessary imports are already handled
-# Initialize the agent here and proceed with the training loop as described
+        self.model.load_state_dict(self.best_model.state_dict())
+        #self.path = f"C:\Users\hamza\OneDrive\Documents\Python Scripts\RL_repos_to_test\rl-class-assignment-Thomas-Risola-main\rl-class-assignment-Thomas-Risola-main"
+        self.path = ""
+        self.save(self.path)
+        return episode_return
 
 
 
+class DuelingAgent(DQNAgent):
+    def model_definition(self, config, device):
+        state_dim = env.observation_space.shape[0]
+        action_dim = env.action_space.n
+        self.model_name_suffix = "dueling"
+        hidden_dim = config.get('hidden_dim', 256)  # Default to 256 if not specified
+        
+        # Initialize the Dueling DQN network with the specified dimensions
+        model = DuelingDQN(input_dim=state_dim, output_dim=action_dim, hidden_dim=hidden_dim).to(device)
+        return model
 
 
-class RandomAgent():
-    """
-    Defines an interface for agents in a simulation or decision-making environment.
 
-    An Agent must implement methods to act based on observations, save its state to a file,
-    and load its state from a file. This interface uses the Protocol class from the typing
-    module to specify methods that concrete classes must implement.
+class DuelingAgentWithDoubleQLearning(DuelingAgent):
+    def gradient_step(self):
+        self.model_name_suffix = "double_dueling"
+        if len(self.memory) > self.batch_size:
+            # Sample a batch from the replay buffer
+            X, A, R, Y, D = self.memory.sample(self.batch_size)
+            
+            # Compute Q values for next states using the online model
+            Q_next = self.model(Y)
+            # Select the best actions in the next states using the online model
+            best_actions = Q_next.max(1)[1].unsqueeze(1)
+            
+            # Compute Q values for the chosen actions in the next states using the target model
+            Q_target_next = self.target_model(Y).gather(1, best_actions)
+            
+            # Compute the target values
+            update = R + self.gamma * Q_target_next * (1 - D)
+            
+            # Compute current Q values
+            Q_current = self.model(X).gather(1, A.long().unsqueeze(1))
+            
+            # Compute loss
+            loss = self.criterion(Q_current, update)
+            
+            # Backpropagation
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
 
-    Protocols are a way to define formal Python interfaces. They allow for type checking
-    and ensure that implementing classes provide specific methods with the expected signatures.
-    """
+    # Other methods from DuelingAgent remain unchanged
 
-    def act(self, observation: np.ndarray, use_random: bool = False) -> int:
-        """
-        Determines the next action based on the current observation from the environment.
 
-        Implementing this method requires processing the observation and optionally incorporating
-        randomness into the decision-making process (e.g., for exploration in reinforcement learning).
+class ProjectAgentWithBatchNorm(DQNAgent):
+    def network(self, config, device):
+        state_dim = env.observation_space.shape[0]
+        n_action = env.action_space.n
+        nb_neurons = config.get('nb_neurons', 256)  # Default to 256 if not specified
+        self.model_name_suffix = "batch_norm"
+        DQN = torch.nn.Sequential(
+            nn.Linear(state_dim, nb_neurons),
+            nn.BatchNorm1d(nb_neurons),  # Batch normalization layer
+            nn.ReLU(),
+            nn.Linear(nb_neurons, nb_neurons),
+            nn.BatchNorm1d(nb_neurons),  # Batch normalization layer
+            nn.ReLU(),
+            nn.Linear(nb_neurons, nb_neurons),
+            nn.BatchNorm1d(nb_neurons),  # Batch normalization layer
+            nn.ReLU(),
+            nn.Linear(nb_neurons, nb_neurons),
+            nn.BatchNorm1d(nb_neurons),  # Batch normalization layer
+            nn.ReLU(),
+            nn.Linear(nb_neurons, nb_neurons),  # Additional layer if needed
+            nn.BatchNorm1d(nb_neurons),  # Batch normalization layer
+            nn.ReLU(),
+            nn.Linear(nb_neurons, n_action)
+        ).to(device)
 
-        Args:
-            observation (np.ndarray): The current environmental observation that the agent must use
-                                       to decide its next action. This array typically represents
-                                       the current state of the environment.
-            use_random (bool, optional): A flag to indicate whether the agent should make a random
-                                         decision. This is often used for exploration. Defaults to False.
-
-        Returns:
-            int: The action to be taken by the agent.
-        """
-        # return random action from the action space of env
-        return random.choice(range(env.action_space.n))
-
-    def save(self, path: str) -> None:
-        """
-        Saves the agent's current state to a file specified by the path.
-
-        This method should serialize the agent's state (e.g., model weights, configuration settings)
-        and save it to a file, allowing the agent to be later restored to this state using the `load` method.
-
-        Args:
-            path (str): The file path where the agent's state should be saved.
-
-        """
-        pass
-
-    def load(self) -> None:
-        """
-        Loads the agent's state from a file specified by the path (HARDCODED). This not a good practice,
-        but it will simplify the grading process.
-
-        This method should deserialize the saved state (e.g., model weights, configuration settings)
-        from the file and restore the agent to this state. Implementations must ensure that the
-        agent's state is compatible with the `act` method's expectations.
-
-        Note:
-            It's important to ensure that neural network models (if used) are loaded in a way that is
-            compatible with the execution device (e.g., CPU, GPU). This may require specific handling
-            depending on the libraries used for model implementation. WARNING: THE GITHUB CLASSROOM
-        HANDLES ONLY CPU EXECUTION. IF YOU USE A NEURAL NETWORK MODEL, MAKE SURE TO LOAD IT IN A WAY THAT
-        DOES NOT REQUIRE A GPU.
-        """
-        pass
-
+        return DQN
 
 
 if __name__ == "__main__":
-    # Agent initialization
-    state_size = env.observation_space.shape[0]
-    action_size = env.action_space.n
-    agent = ProjectAgent2(seed=0)
-
-    # Training loop
-    def train_dqn(n_episodes=2000, max_t=500, eps_start=1.0, eps_end=0.01, eps_decay=0.995):
-        scores = []                        # List to save scores from each episode
-        eps = eps_start                    # Initialize epsilon for epsilon-greedy action selection
-        for i_episode in range(1, n_episodes+1):
-            time_now = time.time()
-            state = env.reset()[0]
-            score = 0
-            for t in range(max_t):
-                action = agent.act(state, use_random=(np.random.rand() <= eps))
-                next_state, reward, done, _, _ = env.step(action)
-                agent.step(state, action, reward, next_state, done)
-                state = next_state
-                score += reward
-                if done:
-                    print("Episode finished after {} timesteps".format(t+1))
-                    break 
-            scores.append(score)           # Save most recent score
-            eps = max(eps_end, eps_decay*eps) # Decrease epsilon
-            # Print the most recent score, teh time taken, value of epsilon
-            print('\rEpisode {}\tAverage Score: {:.2f}\tTime: {:.2f}\tEpsilon: {:.2f}'.format(i_episode, np.mean(scores), time.time() - time_now, eps))
-            #print(f"Episode {i_episode}\tAverage Score: {np.mean(scores):.2f}")
-            if i_episode in [1, 2, 5, 20]:
-                agent.save(f"checkpoint_{i_episode}.pth")
-            if i_episode % 100 == 0:
-                agent.save(f"checkpoint_{i_episode}.pth")
-        return scores
-
-    # Run training
-    scores = train_dqn()
-
-
-
+    # Initialization of the agent. Replace DummyAgent with your custom agent implementation.
+    agent = DQNAgent()
+    agent.train(max_episode=400)
+    agent.load()
+    # Keep the following lines to evaluate your agent unchanged.
+    score_agent: float = evaluate_HIV(agent=agent, nb_episode=1)
+    score_agent_dr: float = evaluate_HIV_population(agent=agent, nb_episode=15)
+    with open(file="score_training.txt", mode="w") as f:
+        f.write(f"{score_agent}\n{score_agent_dr}")
